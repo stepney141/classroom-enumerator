@@ -16,10 +16,11 @@ const loyola_xpath = {
   button_of_curriculum_menu: '//*[@id="tab-rs"]', //ホーム画面ヘッダーのカリキュラム/履修登録メニューのアイコン
   schedule_in_header: '//*[@id="tabmenu-li2"]/span', //カリキュラム/履修登録メニュー内の時間割へのリンク
   link_to_schedule_page: '//*[@id="tabmenu-sub-ul2"]/li[1]/span', //時間割検索ページ本体へのリンク
+  select_faculty_departments_of_schedule_page: '//*[@id="taioJikanwariShozokuCode"]', //時間割検索ページの中の開講所属の<select>タグ
   faculty_departments_of_schedule_page: '//*[@id="taioJikanwariShozokuCode"]/option', //時間割検索ページの中の開講所属の選択肢
+  iframe_of_schedule_page: '//*[@id="main-frame-if"]',
   button_to_search_schedule: '//*[@id="jikanwariReferForm"]/table/tbody/tr[9]/td/p/input[1]', //時間割検索ページの「実行」ボタン
   button_to_back: '/html/body/input', //時間割検索結果からメインに戻るボタン
-  title_of_schedule_page: "//span[contains(text(), '時間割参照／条件入力')]",
 
   /* 時間割表の操作メニューのselectタグ */
   cource_category: '//*[@id="taioJikanwariSecchibunCode"]', //設置分類
@@ -98,6 +99,8 @@ const access_schedule = async (page) => {
       //   page.waitForTimeout(3000),
       curriculum_menu_handle[0].click() //「カリキュラム」のメニューを開く
     ]);
+
+    page.waitForTimeout(2000);
     
     const schedule_in_header_handle = await page.$x(loyola_xpath.schedule_in_header);
     await Promise.all([
@@ -106,51 +109,58 @@ const access_schedule = async (page) => {
       schedule_in_header_handle[0].click() //ヘッダの「時間割」を開く
     ]);
 
+    await page.waitForTimeout(2000);
+
     const link_to_schedule_page_handle = await page.$x(loyola_xpath.link_to_schedule_page);
     await Promise.all([
-    //   page.waitForXPath(loyola_xpath.title_of_schedule_page),
-      page.waitForTimeout(3000),
+    //   page.waitForXPath(loyola_xpath.iframe_of_schedule_pages),
       link_to_schedule_page_handle[0].click() //ヘッダから「時間割参照」を開いて時間割検索メニューを開く
     ]);
+
+    await page.waitForTimeout(2000);
 
     console.log('時間割検索ページへのアクセス:成功');
   } catch (e) {
     console.log(e);
+    return false;
   }
   return page;
 };
 
 const search_schedule = async (page) => {
   try {
+    const [, iframe] = page.frames(); //現在のページが[0]に入っている（n>0なるn個目のiframeは[n]に入る）
+
     for (const cource_category of schedule_page_select_value.cource_category) {
       for (const term of schedule_page_select_value.term) {
-        // const cource_catergory_handle = await page.$x(loyola_xpath.cource_category);
-        // const term_handle = await page.$x(loyola_xpath.term);
-        // await cource_catergory_handle[0].select(cource_category);
-        // await term_handle[0].select(term);
+        await iframe.select(loyola_selector.cource_category, cource_category); //設置分類の選択
+        await iframe.select(loyola_selector.term, term); //学期の選択
 
-        await page.select(loyola_selector.cource_category, cource_category); //設置分類の選択
-        await page.select(loyola_selector.term, term); //学期の選択
+        const faculty_departments_of_schedule_page_handle = await iframe.$x(loyola_xpath.faculty_departments_of_schedule_page); //開講所属の選択
+        const list_of_faculty_departments = faculty_departments_of_schedule_page_handle.map(async (element) => String(await (await element.getProperty('value')).jsonValue()));
+        //<select>の中の<option>を全て取得し、各々のvalue属性を取得する
 
-        const faculty_departments_of_schedule_page_handle = await page.$x(loyola_xpath.faculty_departments_of_schedule_page); //開講所属の選択
-        for (const element of faculty_departments_of_schedule_page_handle) {
-          console.log(element.getProperty('attribute'));
+        for await (const current_faculty_department of list_of_faculty_departments) {
+          console.log(current_faculty_department);
+
+          const select_faculty_departments_of_schedule_page_handle = await iframe.$x(loyola_xpath.select_faculty_departments_of_schedule_page);
+          await select_faculty_departments_of_schedule_page_handle[0].select(current_faculty_department); //開講所属の選択
+
+          const button_to_search_schedule_handle = await iframe.$x(loyola_xpath.button_to_search_schedule);
+          await Promise.all([
+            iframe.waitForNavigation({ waitUntil: ["domcontentloaded", "networkidle0"] }),
+            button_to_search_schedule_handle[0].click() //「実行」を押して時間割検索を開始する
+          ]);
+
+          await iframe.waitForTimeout(1000);
+          //ここで検索結果をパース
+
+          const button_to_back_handle = await iframe.$x(loyola_xpath.button_to_back);
+          await Promise.all([
+            iframe.waitForNavigation({ waitUntil: ["domcontentloaded", "networkidle0"] }),
+            button_to_back_handle[0].click() //検索結果から元のページに戻る
+          ]);
         }
-
-        const button_to_search_schedule_handle = await page.$x(loyola_xpath.button_to_search_scheduless);
-        await Promise.all([
-          page.waitForNavigation(),
-          button_to_search_schedule_handle[0].click() //「実行」を押して時間割検索を開始する
-        ]);
-
-        await page.waitForTimeout(3000);
-        //検索結果のパース
-
-        const button_to_back_handle = await page.$x(loyola_xpath.button_to_back);
-        await Promise.all([
-          page.waitForNavigation(),
-          button_to_back_handle[0].click() //検索結果から元のページに戻る
-        ]);
       }
     }
     console.log('時間割検索の実行:成功');
@@ -175,7 +185,7 @@ const search_schedule = async (page) => {
     // headless: true,
     devtools: true,
     timeout: 2 * 60 * 1000,
-    slowMo: 50
+    slowMo: 100
   });
       
   try {
