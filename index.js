@@ -21,6 +21,7 @@ const loyola_xpath = {
   iframe_of_schedule_page: '//*[@id="main-frame-if"]',
   button_to_search_schedule: '//*[@id="jikanwariReferForm"]/table/tbody/tr[9]/td/p/input[1]', //時間割検索ページの「実行」ボタン
   button_to_back: '/html/body/input', //時間割検索結果からメインに戻るボタン
+  search_schedule_error: "//span[@class='error']",
 
   /* 時間割表の操作メニューのselectタグ */
   cource_category: '//*[@id="taioJikanwariSecchibunCode"]', //設置分類
@@ -35,32 +36,31 @@ const loyola_selector = {
   term: 'select#gakkiKubunCode' //学期
 };
 
+const not_found_strings = "入力された条件に該当する科目は存在しません。　検索条件を変更してください。";
+
 const schedule_page_select_value = {
   /* 時間割表の操作メニューのselectタグのvalue */
   cource_category: [ //設置分類
-    '1', //大学
-    '2'  //大学院
+    { 
+      name: '大学',
+      id: '1',
+    },
+    {
+      name: '大学院',
+      id: '2'
+    }
   ],
   term: [ //学期
-    '1', //春学期
-    '2'  //秋学期
+    { 
+      name: '春学期',
+      id: '1',
+    },
+    { 
+      name: '秋学期',
+      id: '2',
+    }
   ]
   // 開講所属は数が膨大なので別途取得する
-};
-
-const mouse_click = async (x, y, page) => {
-  try {
-    await Promise.all([
-      page.mouse.move(x, y),
-      page.waitForTimeout(1000),
-      page.mouse.click(x, y),
-    ]);
-    return true;
-  } catch (e) {
-    const error_m = 'mouse_click_error:';
-    console.error(error_m + e);
-    return false;
-  }
 };
 
 const login = async (page) => {
@@ -113,7 +113,7 @@ const access_schedule = async (page) => {
 
     const link_to_schedule_page_handle = await page.$x(loyola_xpath.link_to_schedule_page);
     await Promise.all([
-    //   page.waitForXPath(loyola_xpath.iframe_of_schedule_pages),
+      page.waitForFrame(async (frame) => frame.url().includes('scs.cl.sophia.ac.jp')),
       link_to_schedule_page_handle[0].click() //ヘッダから「時間割参照」を開いて時間割検索メニューを開く
     ]);
 
@@ -133,33 +133,47 @@ const search_schedule = async (page) => {
 
     for (const cource_category of schedule_page_select_value.cource_category) {
       for (const term of schedule_page_select_value.term) {
-        await iframe.select(loyola_selector.cource_category, cource_category); //設置分類の選択
-        await iframe.select(loyola_selector.term, term); //学期の選択
+        console.log(`設置分類: ${cource_category.name}, 学期: ${term.name}`);
+        await iframe.select(loyola_selector.cource_category, cource_category.id); //設置分類の選択
+        await iframe.select(loyola_selector.term, term.id); //学期の選択
 
         const faculty_departments_of_schedule_page_handle = await iframe.$x(loyola_xpath.faculty_departments_of_schedule_page); //開講所属の選択
-        const list_of_faculty_departments = faculty_departments_of_schedule_page_handle.map(async (element) => String(await (await element.getProperty('value')).jsonValue()));
+        const list_of_faculty_departments = faculty_departments_of_schedule_page_handle.map(async (element) => {
+          return {
+            id: String(await (await element.getProperty('value')).jsonValue()),
+            name: String(await (await element.getProperty('innerText')).jsonValue())
+          };
+        });
         //<select>の中の<option>を全て取得し、各々のvalue属性を取得する
+        console.log(`開講所属数: ${list_of_faculty_departments.length}`);
 
-        for await (const current_faculty_department of list_of_faculty_departments) {
-          console.log(current_faculty_department);
+        for await (const fd of list_of_faculty_departments) {
+          console.log(`開講所属名: ${fd.name}, value: ${fd.id}`);
 
           const select_faculty_departments_of_schedule_page_handle = await iframe.$x(loyola_xpath.select_faculty_departments_of_schedule_page);
-          await select_faculty_departments_of_schedule_page_handle[0].select(current_faculty_department); //開講所属の選択
+          await select_faculty_departments_of_schedule_page_handle[0].select(fd.id); //開講所属の選択
 
           const button_to_search_schedule_handle = await iframe.$x(loyola_xpath.button_to_search_schedule);
-          await Promise.all([
+          const [response] = await Promise.all([
             iframe.waitForNavigation({ waitUntil: ["domcontentloaded", "networkidle0"] }),
             button_to_search_schedule_handle[0].click() //「実行」を押して時間割検索を開始する
           ]);
 
-          await iframe.waitForTimeout(1000);
-          //ここで検索結果をパース
+          if ((await response.text()).includes(not_found_strings)) { //異常系
+            console.log('該当開講科目なし');
+          } else { //正常系
+            await iframe.waitForTimeout(1000);
 
-          const button_to_back_handle = await iframe.$x(loyola_xpath.button_to_back);
-          await Promise.all([
-            iframe.waitForNavigation({ waitUntil: ["domcontentloaded", "networkidle0"] }),
-            button_to_back_handle[0].click() //検索結果から元のページに戻る
-          ]);
+            // await parse_schedule(page);
+            //ここで検索結果をパース
+
+            const button_to_back_handle = await iframe.$x(loyola_xpath.button_to_back);
+            await Promise.all([
+              iframe.waitForNavigation({ waitUntil: ["domcontentloaded", "networkidle0"] }),
+              iframe.waitForTimeout(2000),
+              button_to_back_handle[0].click() //検索結果から元のページに戻る
+            ]);
+          }
         }
       }
     }
@@ -169,6 +183,12 @@ const search_schedule = async (page) => {
   }
   return page;
 };
+
+const parse_schedule = async (page) => {};
+
+const schedule_to_json = () => {};
+
+const json_to_humanreadable_table = () => {};
 
 (async () => {
   const browser = await puppeteer.launch({
@@ -183,7 +203,8 @@ const search_schedule = async (page) => {
     //   '--single-process'
     // ],
     // headless: true,
-    devtools: true,
+    headless: false,
+    // devtools: true,
     timeout: 2 * 60 * 1000,
     slowMo: 100
   });
